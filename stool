@@ -10,12 +10,72 @@ def createDB(host,name,path=None):
     '''
     couch = couchdb.Server(host)
     try:
-        db = couch.create(name)
+        if name in couch:
+            print 'db:',name,'already exists'
+            return
+        else:
+            db = couch.create(name)
     except couchdb.http.Unauthorized:
         couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
-        db = couch.create(name)
-    if path is None:
+        if name in couch:
+            print 'db:',name,'already exists'
+            return
+        else:
+            db = couch.create(name)
+    if path is not None:
+        updateDesign(db,path)
+
+def updateDB(host,name,path,removeOld):
+    '''See updateDesign.  This just logs in first
+    '''
+    couch = couchdb.Server(host)
+    try:
+        if name not in couch:
+            print 'db:',name,'does not exist'
+            return
+        else:
+            db = couch[name]
+    except couchdb.http.Unauthorized:
+        couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
+        if name in couch:
+            print 'db:',name,'does not exist'
+            return
+        else:
+            db = couch[name]
+    if path is not None:
+        try:
+            updateDesign(db,path,removeOld)
+        except couchdb.http.Unauthorized:
+            couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
+            db = couch[name]
+            updateDesign(db,path,removeOld)
+            
+def deleteDB(host,name):
+    '''Delete the database
+    '''
+    ans = raw_input('Delete DB %s from %s! Are you sure (y/N)' %(name,host))
+    if ans != 'Y' and ans != 'y':
         return
+    couch = couchdb.Server(host)
+    try:
+        if not name in couch:
+            print 'db:',name,'does not exist'
+            return
+        else:
+            db = couch.delete(name)
+    except couchdb.http.Unauthorized:
+        couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
+        if not name in couch:
+            print 'db:',name,'does not exist'
+            return
+        else:
+            db = couch.delete(name)
+
+def updateDesign(db,path,removeOld=False):
+    '''Update all the design documents in a database.
+    If removeOld is True, then any fields (views etc.) not in the path
+    but stored in the doc on the DB are removed from the DB DDoc.
+    '''
     for dirName in os.walk(path).next()[1]:
         #each directory should be the name of a design document in the first instance
         if dirName=='auth':
@@ -24,13 +84,23 @@ def createDB(host,name,path=None):
             attachList = []
             doc = {'_id':'_design/%s'%dirName,
                    'language':'javascript'}
+            if doc['_id'] in db:
+                #empty first if we want to update the design
+                doc = db[doc['_id']]
+                if removeOld==True:
+                    docCopy = doc
+                    doc = {}
+                    doc = {'_id':docCopy['_id'],
+                           '_rev':docCopy['_rev'],
+                           'language':'javascript'}
             docPath = os.path.join(path,dirName)
             for subDirName in os.walk(docPath).next()[1]:
                 #add all other information
                 #only want views, shows etc
                 baseDir = os.path.join(docPath,subDirName)
                 if subDirName=='views':
-                    doc['views']={}
+                    if not doc.has_key('views'):
+                        doc['views']={}
                     for viewName in os.walk(baseDir).next()[1]:
                         viewDir = os.path.join(baseDir,viewName)
                         #should only use map.js and reduce.js here
@@ -51,30 +121,51 @@ def createDB(host,name,path=None):
                             if redStr!='':
                                 doc['views'][viewName]['reduce']=redStr
                 if subDirName=='attachments':
-                    print 'yes?',baseDir
                     for root,dirs,files in os.walk(baseDir):
                         #maintain the original file structure
                         for f in files:
-                            print root,dirs,f
                             fPath = os.path.join(root,f)
                             fName = fPath[len(baseDir)+1:]
-                            attachList.append([fPath,fName])
-                            print 'fp:',fPath,'fn:',fName
-                        
+                            attachList.append([fPath,fName])                        
             db.save(doc)
             for [fPath,fName] in attachList:
-                print fPath,fName
                 db.put_attachment(doc,open(fPath,'r'),fName)
-                
+
 if __name__ == '__main__':
     parser = optparse.OptionParser( usage = "./stool <options>")
     parser.add_option('-n',dest='name',help='Database name')
     parser.add_option('-s',dest='host',help='Database host server')
     parser.add_option('-d',dest='design',help='Path to design docs')
+    parser.add_option('--delete',dest='delete',action='store_true',help='Delete specified database',default=False)
+    parser.add_option('--update',dest='update',action='store_true',help='Update specified database',default=False)
+    parser.add_option('--prune' ,dest='prune' ,action='store_true',help='Prune specified database',default=False)
     (options,args) = parser.parse_args()
+    mode = 'create'
+    if options.delete is True:
+        mode = 'delete'
+    if options.update is True:
+        mode = 'update'
+    if options.prune is True:
+        mode = 'prune'
     if not options.host or not options.name:
         parser.print_help()
     else:
-        createDB(options.host,options.name,options.design)
+        if mode == 'create':
+            createDB(options.host,options.name,options.design)
+        elif mode == 'delete':
+            deleteDB(options.host,options.name)
+        elif mode == 'update':
+            if not options.design:
+                print 'design docs required'
+                parser.print_help()
+            else:
+                updateDB(options.host,options.name,options.design,False)
+        elif mode == 'prune':
+            if not options.design:
+                print 'design docs required'
+                parser.print_help()
+            else:
+                updateDB(options.host,options.name,options.design,True)
+            
     
         
