@@ -1,0 +1,80 @@
+#!/usr/bin/env python
+
+import os
+import optparse
+import couchdb
+import getpass
+
+def createDB(host,name,path=None):
+    '''Create a database on server with name and design docs in the path
+    '''
+    couch = couchdb.Server(host)
+    try:
+        db = couch.create(name)
+    except couchdb.http.Unauthorized:
+        couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
+        db = couch.create(name)
+    if path is None:
+        return
+    for dirName in os.walk(path).next()[1]:
+        #each directory should be the name of a design document in the first instance
+        if dirName=='auth':
+            pass
+        else:
+            attachList = []
+            doc = {'_id':'_design/%s'%dirName,
+                   'language':'javascript'}
+            docPath = os.path.join(path,dirName)
+            for subDirName in os.walk(docPath).next()[1]:
+                #add all other information
+                #only want views, shows etc
+                baseDir = os.path.join(docPath,subDirName)
+                if subDirName=='views':
+                    doc['views']={}
+                    for viewName in os.walk(baseDir).next()[1]:
+                        viewDir = os.path.join(baseDir,viewName)
+                        #should only use map.js and reduce.js here
+                        mapStr = ''
+                        redStr = None
+                        if os.path.exists(os.path.join(viewDir,'map.js')):
+                            fin = file(os.path.join(viewDir,'map.js'))
+                            for line in fin.readlines():
+                                mapStr += line.strip()
+                        if os.path.exists(os.path.join(viewDir,'reduce.js')):
+                            redStr = ''
+                            fin = file(os.path.join(viewDir,'reduce.js'))
+                            for line in fin.readlines():
+                                redStr += line.strip()
+                        if mapStr!='':
+                            doc['views'][viewName]={}
+                            doc['views'][viewName]['map']=mapStr
+                            if redStr!='':
+                                doc['views'][viewName]['reduce']=redStr
+                if subDirName=='attachments':
+                    print 'yes?',baseDir
+                    for root,dirs,files in os.walk(baseDir):
+                        #maintain the original file structure
+                        for f in files:
+                            print root,dirs,f
+                            fPath = os.path.join(root,f)
+                            fName = fPath[len(baseDir)+1:]
+                            attachList.append([fPath,fName])
+                            print 'fp:',fPath,'fn:',fName
+                        
+            db.save(doc)
+            for [fPath,fName] in attachList:
+                print fPath,fName
+                db.put_attachment(doc,open(fPath,'r'),fName)
+                
+if __name__ == '__main__':
+    parser = optparse.OptionParser( usage = "./stool <options>")
+    parser.add_option('-n',dest='name',help='Database name')
+    parser.add_option('-s',dest='host',help='Database host server')
+    parser.add_option('-d',dest='design',help='Path to design docs')
+    (options,args) = parser.parse_args()
+    if not options.host or not options.name:
+        parser.print_help()
+    else:
+        createDB(options.host,options.name,options.design)
+    
+        
