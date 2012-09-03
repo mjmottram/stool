@@ -1,0 +1,4 @@
+stool
+=====
+
+like a couchapp
