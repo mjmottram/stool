@@ -37,7 +37,7 @@ def updateDB(host,name,path,removeOld):
             db = couch[name]
     except couchdb.http.Unauthorized:
         couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
-        if name in couch:
+        if name not in couch:
             print 'db:',name,'does not exist'
             return
         else:
