@@ -105,7 +105,7 @@ def updateDesign(db,path,removeOld=False):
                         viewDir = os.path.join(baseDir,viewName)
                         #should only use map.js and reduce.js here
                         mapStr = ''
-                        redStr = None
+                        redStr = ''
                         if os.path.exists(os.path.join(viewDir,'map.js')):
                             fin = file(os.path.join(viewDir,'map.js'))
                             for line in fin.readlines():
