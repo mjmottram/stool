@@ -79,7 +79,16 @@ def updateDesign(db,path,removeOld=False):
     for dirName in os.walk(path).next()[1]:
         #each directory should be the name of a design document in the first instance
         if dirName=='auth':
-            pass
+            fName = os.path.join(os.path.join(path,dirName),'validate_doc_update.js')
+            if os.path.exists(fName):
+                doc = {'_id':'_design/%s'%dirName,
+                       'language':'javascript'}
+                valStr = ''
+                fin = file(fName)
+                for line in fin.readlines():
+                    valStr += line.strip()
+                doc['validate_doc_update']=valStr
+                db.save(doc)
         else:
             attachList = []
             doc = {'_id':'_design/%s'%dirName,
