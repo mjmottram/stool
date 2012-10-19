@@ -56,7 +56,7 @@ def Stool:
         resp = conn.getresponse()
         print resp
 
-    def updateDesign(db,path,removeOld=False):
+    def updateDesign(self,path):
         '''Update all the design documents in a database.
         If removeOld is True, then any fields (views etc.) not in the path
         but stored in the doc on the DB are removed from the DB DDoc.
@@ -79,12 +79,12 @@ def Stool:
                        'language':'javascript'}
                 if doc['_id'] in db:
                     doc = db[doc['_id']]
-                    if removeOld==True:
-                        docCopy = doc
-                        doc = {}
-                        doc = {'_id':docCopy['_id'],
-                               '_rev':docCopy['_rev'],
-                               'language':'javascript'}
+                    #if removeOld==True:
+                    #    docCopy = doc
+                    #    doc = {}
+                    #    doc = {'_id':docCopy['_id'],
+                    #           '_rev':docCopy['_rev'],
+                    #           'language':'javascript'}
                 docPath = os.path.join(path,dirName)
                 for subDirName in os.walk(docPath).next()[1]:
                     baseDir = os.path.join(docPath,subDirName)
@@ -136,22 +136,25 @@ if __name__ == '__main__':
     if not options.host or not options.name:
         parser.print_help()
     else:
+        stool = Stool(options.host,options.name)
         if mode == 'create':
-            createDB(options.host,options.name,options.design)
+            stool.createDB(options.host,options.name)
+            if options.design:
+                stool.updateDesign(options.path)
         elif mode == 'delete':
-            deleteDB(options.host,options.name)
+            stool.deleteDB(options.host,options.name)
         elif mode == 'update':
             if not options.design:
                 print 'design docs required'
                 parser.print_help()
             else:
-                updateDB(options.host,options.name,options.design,False)
-        elif mode == 'prune':
-            if not options.design:
-                print 'design docs required'
-                parser.print_help()
-            else:
-                updateDB(options.host,options.name,options.design,True)
+                self.updateDB(options.design)
+        #elif mode == 'prune':
+        #    if not options.design:
+        #        print 'design docs required'
+        #        parser.print_help()
+        #    else:
+        #        updateDB(options.host,options.name,options.design,True)
             
     
         
