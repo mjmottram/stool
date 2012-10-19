@@ -5,8 +5,11 @@ import optparse
 import getpass
 import httplib
 import simplejson
+import json
+import urlparse
+import base64
 
-def Stool:
+class Stool:
     '''Class to handle DB interactions
     '''
 
@@ -18,12 +21,14 @@ def Stool:
         user = raw_input('Username: ')
         pswd = getpass.getpass('Password: ')
         self.auth = base64.encodestring('%s:%s'%(user,pswd))
+        scheme,host = urlparse.urlsplit(url,'http',False)[:2]
+        self.host = host
 
     def connect(self):
         '''Connect to the DB server'''
         conn = httplib.HTTPConnection(self.host)
         headers = {}
-        headers['Authorization']='Basic %s' self.auth
+        headers['Authorization']='Basic %s' % self.auth
         headers['Content-type']='application/json'
         return conn,headers
 
@@ -34,7 +39,7 @@ def Stool:
         url = '/%s/' % self.name
         conn.request('PUT',url,'',headers)
         resp = conn.getresponse()
-        print resp
+        print resp.read()
             
     def deleteDB(self):
         '''Delete the database
@@ -46,15 +51,37 @@ def Stool:
         url = '/%s/' % self.name
         conn.request('DELETE',url,'',headers)
         resp = conn.getresponse()
-        print resp
+        print resp.read()
 
     def saveDesign(self,doc):
         '''Save a document'''
-        conn,headers = self.connect
-        url = '/%s/_design/%s'
-        conn.request('PUT',url,json.dumps(doc),headers)
+        conn,headers = self.connect()
+        url = '/%s/%s' % (self.name,doc['_id'])
+        jsondump = json.dumps(doc)
+        conn.request('PUT',url,'%s'%jsondump,headers)
         resp = conn.getresponse()
-        print resp
+        print self.host
+        print conn
+        print resp.read()
+        print resp.status,resp.reason
+        print jsondump
+
+    def saveDesignFile(self,fname,docid):
+        '''Save a document'''
+        fin = file(fname)
+        fcont=''
+        for line in fin.readlines():
+            fcont += line
+        conn,headers = self.connect()
+        url = '/%s/%s' % (self.name,docid)
+        jsondump = simplejson.dumps(fcont)
+        conn.request('PUT',url,jsondump,headers)
+        resp = conn.getresponse()
+        print self.host
+        print conn
+        print resp.read()
+        print resp.status,resp.reason
+        print jsondump
 
     def updateDesign(self,path):
         '''Update all the design documents in a database.
@@ -65,20 +92,20 @@ def Stool:
             if dirName=='auth':
                 fName = os.path.join(os.path.join(path,dirName),'validate_doc_update.js')
                 if os.path.exists(fName):
-                    doc = {'_id':'_design/%s'%dirName,
-                           'language':'javascript'}
-                    valStr = ''
+                    doc = {"_id":"_design/%s"%dirName,
+                           "language":"javascript"}
+                    valStr = ""
                     fin = file(fName)
                     for line in fin.readlines():
                         valStr += line.strip()
-                    doc['validate_doc_update']=valStr
+                    doc["validate_doc_update"]=valStr
                     self.saveDesign(doc)
             else:
                 attachList = []
                 doc = {'_id':'_design/%s'%dirName,
                        'language':'javascript'}
-                if doc['_id'] in db:
-                    doc = db[doc['_id']]
+                #if doc['_id'] in db:
+                #    doc = db[doc['_id']]
                     #if removeOld==True:
                     #    docCopy = doc
                     #    doc = {}
@@ -88,34 +115,42 @@ def Stool:
                 docPath = os.path.join(path,dirName)
                 for subDirName in os.walk(docPath).next()[1]:
                     baseDir = os.path.join(docPath,subDirName)
-                    if subDirName=='views':
-                        if not doc.has_key('views'):
-                            doc['views']={}
+                    if subDirName=="views":
+                        if not doc.has_key("views"):
+                            doc[subDirName]={}
                         for viewName in os.walk(baseDir).next()[1]:
                             viewDir = os.path.join(baseDir,viewName)
-                            mapStr = ''
-                            redStr = ''
-                            if os.path.exists(os.path.join(viewDir,'map.js')):
-                                fin = file(os.path.join(viewDir,'map.js'))
+                            mapStr = ""
+                            redStr = ""
+                            if os.path.exists(os.path.join(viewDir,"map.js")):
+                                fin = file(os.path.join(viewDir,"map.js"))
                                 for line in fin.readlines():
                                     mapStr += line.strip()
-                            if os.path.exists(os.path.join(viewDir,'reduce.js')):
-                                redStr = ''
-                                fin = file(os.path.join(viewDir,'reduce.js'))
+                            if os.path.exists(os.path.join(viewDir,"reduce.js")):
+                                redStr = ""
+                                fin = file(os.path.join(viewDir,"reduce.js"))
                                 for line in fin.readlines():
                                     redStr += line.strip()
-                            if mapStr!='':
-                                doc['views'][viewName]={}
-                                doc['views'][viewName]['map']=mapStr
-                                if redStr!='':
-                                    doc['views'][viewName]['reduce']=redStr
-                    if subDirName=='attachments':
+                            if mapStr!="":
+                                doc["views"][viewName]={}
+                                doc["views"][viewName]["map"]=mapStr
+                                if redStr!="":
+                                    doc["views"][viewName]["reduce"]=redStr
+                    if subDirName=="attachments":
                         for root,dirs,files in os.walk(baseDir):
                             for f in files:
                                 fPath = os.path.join(root,f)
                                 fName = fPath[len(baseDir)+1:]
                                 attachList.append([fPath,fName])                        
+                    #save to a temp file for now!
                     self.saveDesign(doc)
+                    #tempdoc = file('tempf.js','w')
+                    #tempdoc.write('{')
+                    #for field in doc:
+                    #    tempdoc.write('"%s" : "%s" ,' %(field,doc[field]))
+                    #tempdoc.write('}')
+                    #tempdoc.close()
+                    #self.saveDesignFile('tempf.js',doc['_id'])
 
 if __name__ == '__main__':
     parser = optparse.OptionParser( usage = "./stool <options>")
@@ -138,17 +173,17 @@ if __name__ == '__main__':
     else:
         stool = Stool(options.host,options.name)
         if mode == 'create':
-            stool.createDB(options.host,options.name)
+            stool.createDB()
             if options.design:
-                stool.updateDesign(options.path)
+                stool.updateDesign(options.design)
         elif mode == 'delete':
-            stool.deleteDB(options.host,options.name)
+            stool.deleteDB()
         elif mode == 'update':
             if not options.design:
                 print 'design docs required'
                 parser.print_help()
             else:
-                self.updateDB(options.design)
+                stool.updateDesign(options.design)
         #elif mode == 'prune':
         #    if not options.design:
         #        print 'design docs required'
