@@ -8,6 +8,9 @@ import simplejson
 import json
 import urlparse
 import base64
+import re
+import mimetypes
+import time
 
 class Stool:
     '''Class to handle DB interactions
@@ -20,14 +23,24 @@ class Stool:
         self.name = name
         user = raw_input('Username: ')
         pswd = getpass.getpass('Password: ')
-        self.auth = base64.encodestring('%s:%s'%(user,pswd))
-        scheme,host = urlparse.urlsplit(url,'http',False)[:2]
-        self.host = host
+        self.auth = base64.encodestring('%s:%s' % (user,pswd))[:-1]
+        #self.auth = base64.encodestring('%s:%s'%(user,pswd))
+        #scheme,host = urlparse.urlsplit(url,'http',False)[:2]
+        match = re.match(r'((?P<protocol>.+):\/\/)?((?P<user>.+):(?P<pw>.+)?@)?(?P<url>.+)', self.url)
+        self.host = match.group('url')
+        print 'host:',self.host
 
     def connect(self):
         '''Connect to the DB server'''
         conn = httplib.HTTPConnection(self.host)
+        #match = re.match(r'((?P<protocol>.+):\/\/)?((?P<user>.+):(?P<pw>.+)?@)?(?P<url>.+)', self.url)
+        #host, dbpath = match.group('url').split('/', 1)
+        #if match.groups('protocol')=='https':
+        #    conn = httplib.HTTPSConnection(self.host)
+        #else:
+        #    conn = httplib.HTTPConnection(self.host)
         headers = {}
+        headers.setdefault('Accept', 'application/json')
         headers['Authorization']='Basic %s' % self.auth
         headers['Content-type']='application/json'
         return conn,headers
@@ -57,31 +70,21 @@ class Stool:
         '''Save a document'''
         conn,headers = self.connect()
         url = '/%s/%s' % (self.name,doc['_id'])
-        jsondump = json.dumps(doc)
-        conn.request('PUT',url,'%s'%jsondump,headers)
+        #first check what is currently on the db
+        db_url = '/%s/%s'%(self.name,doc['_id'])
+        conn.request('GET',db_url,'',{'Authorization':'Basic %s' % self.auth})
         resp = conn.getresponse()
-        print self.host
-        print conn
+        if resp.status == 200:
+            doc['_rev'] = json.loads(resp.read())['_rev']
+        jsondump = json.dumps(doc).encode('utf-8')
+        conn.request('PUT',db_url,'%s'%jsondump,headers)
+        try:
+            resp = conn.getresponse()
+        except:
+            #wait a few seconds!
+            time.sleep(5)
+            resp = conn.getresponse()
         print resp.read()
-        print resp.status,resp.reason
-        print jsondump
-
-    def saveDesignFile(self,fname,docid):
-        '''Save a document'''
-        fin = file(fname)
-        fcont=''
-        for line in fin.readlines():
-            fcont += line
-        conn,headers = self.connect()
-        url = '/%s/%s' % (self.name,docid)
-        jsondump = simplejson.dumps(fcont)
-        conn.request('PUT',url,jsondump,headers)
-        resp = conn.getresponse()
-        print self.host
-        print conn
-        print resp.read()
-        print resp.status,resp.reason
-        print jsondump
 
     def updateDesign(self,path):
         '''Update all the design documents in a database.
@@ -104,14 +107,6 @@ class Stool:
                 attachList = []
                 doc = {'_id':'_design/%s'%dirName,
                        'language':'javascript'}
-                #if doc['_id'] in db:
-                #    doc = db[doc['_id']]
-                    #if removeOld==True:
-                    #    docCopy = doc
-                    #    doc = {}
-                    #    doc = {'_id':docCopy['_id'],
-                    #           '_rev':docCopy['_rev'],
-                    #           'language':'javascript'}
                 docPath = os.path.join(path,dirName)
                 for subDirName in os.walk(docPath).next()[1]:
                     baseDir = os.path.join(docPath,subDirName)
@@ -141,16 +136,16 @@ class Stool:
                             for f in files:
                                 fPath = os.path.join(root,f)
                                 fName = fPath[len(baseDir)+1:]
-                                attachList.append([fPath,fName])                        
-                    #save to a temp file for now!
+                                attachList.append([fPath,fName])
+                    for [fPath,fName] in attachList:
+                        print fPath,fName
+                        if '_attachments' not in doc:
+                            doc['_attachments']={}
+                        mime = mimetypes.guess_type(fPath)[0]
+                        f = file(fPath,'r')
+                        doc['_attachments'][fName]={'content_type':mime,
+                                                    'data':f.read().encode('base64')}
                     self.saveDesign(doc)
-                    #tempdoc = file('tempf.js','w')
-                    #tempdoc.write('{')
-                    #for field in doc:
-                    #    tempdoc.write('"%s" : "%s" ,' %(field,doc[field]))
-                    #tempdoc.write('}')
-                    #tempdoc.close()
-                    #self.saveDesignFile('tempf.js',doc['_id'])
 
 if __name__ == '__main__':
     parser = optparse.OptionParser( usage = "./stool <options>")
