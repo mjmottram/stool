@@ -140,16 +140,19 @@ def attachDocs(host,name):
         postFile = True
         while postFile==True:
             dname = raw_input('Doc ID to post to: ')
-            fpath = raw_input('Path to file: ')
-            fname = raw_input('File name (blank for same as file): ')
             docid = '_design/%s'%dname
-            if not os.path.exists(fpath):
-                print 'cannot post: invalid file path'
-            elif not docid in db:
+            if not docid in db:
                 print 'cannot post: invalid design name'
             else:
-                doc = db[docid]
-                db.put_attachment(doc,open(fpath,'r'),fname)
+                fpath = raw_input('Path to file: ')
+                if not os.path.exists(fpath):
+                    print 'cannot post: invalid file path'
+                else:
+                    fname = raw_input('File name (blank for same as file): ')
+                    if fname=='' or fname==None:
+                        fname = fpath.split('/')[-1]
+                    doc = db[docid]
+                    db.put_attachment(doc,open(fpath,'r'),fname)
             another = raw_input('Post another file (y/N): ')
             if another!='y' and another!='Y':
                 postFile = False
