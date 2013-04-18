@@ -1,47 +1,41 @@
 #!/usr/bin/env python
 
 import os
+import sys
 import optparse
 import couchdb
 import getpass
 
+def loginDB(host,name):
+    '''Just login to get the database.
+    Assume we ALWAYS need login credentials.
+    '''
+    db = None
+    couch = couchdb.Server(host)
+    couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
+    if name in couch:
+        db = couch[name]
+    return couch,db        
+
 def createDB(host,name,path=None):
     '''Create a database on server with name and design docs in the path
     '''
-    couch = couchdb.Server(host)
-    try:
-        if name in couch:
-            print 'db:',name,'already exists'
-            return
-        else:
-            db = couch.create(name)
-    except couchdb.http.Unauthorized:
-        couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
-        if name in couch:
-            print 'db:',name,'already exists'
-            return
-        else:
-            db = couch.create(name)
+    couch,db = loginDB(host,name)
+    if db!=None:
+        print 'db',name,'already exists'
+        return
+    else:
+        db = couch.create(name)
     if path is not None:
         updateDesign(db,path)
 
 def updateDB(host,name,path,removeOld):
     '''See updateDesign.  This just logs in first
     '''
-    couch = couchdb.Server(host)
-    try:
-        if name not in couch:
-            print 'db:',name,'does not exist'
-            return
-        else:
-            db = couch[name]
-    except couchdb.http.Unauthorized:
-        couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
-        if name not in couch:
-            print 'db:',name,'does not exist'
-            return
-        else:
-            db = couch[name]
+    couch,db = loginDB(host,name)
+    if db==None:
+        print 'db:',name,'does not exist'
+        return
     if path is not None:
         try:
             updateDesign(db,path,removeOld)
@@ -56,20 +50,12 @@ def deleteDB(host,name):
     ans = raw_input('Delete DB %s from %s! Are you sure (y/N)' %(name,host))
     if ans != 'Y' and ans != 'y':
         return
-    couch = couchdb.Server(host)
-    try:
-        if not name in couch:
-            print 'db:',name,'does not exist'
-            return
-        else:
-            db = couch.delete(name)
-    except couchdb.http.Unauthorized:
-        couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
-        if not name in couch:
-            print 'db:',name,'does not exist'
-            return
-        else:
-            db = couch.delete(name)
+    couch,db = loginDB(host,name)
+    if db==None:
+        print 'db:',name,'does not exist'
+        return
+    else:
+        couch.delete(name)
 
 def updateDesign(db,path,removeOld=False):
     '''Update all the design documents in a database.
@@ -88,7 +74,11 @@ def updateDesign(db,path,removeOld=False):
                 for line in fin.readlines():
                     valStr += line.strip()
                 doc['validate_doc_update']=valStr
-                db.save(doc)
+                try:
+                    db.save(doc)
+                except:
+                    #already have an auth doc, assume it's fine!
+                    pass
         else:
             attachList = []
             doc = {'_id':'_design/%s'%dirName,
@@ -135,10 +125,34 @@ def updateDesign(db,path,removeOld=False):
                         for f in files:
                             fPath = os.path.join(root,f)
                             fName = fPath[len(baseDir)+1:]
-                            attachList.append([fPath,fName])                        
+                            attachList.append([fPath,fName])  
             db.save(doc)
             for [fPath,fName] in attachList:
                 db.put_attachment(doc,open(fPath,'r'),fName)
+
+def attachDocs(host,name):
+    couch,db = loginDB(host,name)
+    if db==None:
+        print 'db:',name,'does not exist'
+        return
+    else:
+        #prompt user for attachment and design doc to post to
+        postFile = True
+        while postFile==True:
+            dname = raw_input('Doc ID to post to: ')
+            fpath = raw_input('Path to file: ')
+            fname = raw_input('File name (blank for same as file): ')
+            docid = '_design/%s'%dname
+            if not os.path.exists(fpath):
+                print 'cannot post: invalid file path'
+            elif not docid in db:
+                print 'cannot post: invalid design name'
+            else:
+                doc = db[docid]
+                db.put_attachment(doc,open(fpath,'r'),fname)
+            another = raw_input('Post another file (y/N): ')
+            if another!='y' and another!='Y':
+                postFile = False
 
 if __name__ == '__main__':
     parser = optparse.OptionParser( usage = "./stool <options>")
@@ -148,14 +162,33 @@ if __name__ == '__main__':
     parser.add_option('--delete',dest='delete',action='store_true',help='Delete specified database',default=False)
     parser.add_option('--update',dest='update',action='store_true',help='Update specified database',default=False)
     parser.add_option('--prune' ,dest='prune' ,action='store_true',help='Prune specified database',default=False)
+    parser.add_option('--attach',dest='attach',action='store_true',help='Attach a single document',default=False)
     (options,args) = parser.parse_args()
     mode = 'create'
-    if options.delete is True:
-        mode = 'delete'
-    if options.update is True:
-        mode = 'update'
-    if options.prune is True:
-        mode = 'prune'
+    if options.delete==True:
+        if mode=='create':
+            mode = 'delete'
+        else:
+            parser.print_help()
+            raise Exception,'Only one -- option allowed'
+    if options.update==True:
+        if mode=='create':
+            mode = 'update'
+        else:
+            parser.print_help()
+            raise Exception,'Only one -- option allowed'
+    if options.prune==True:
+        if mode=='create':
+            mode = 'prune'
+        else:
+            parser.print_help()
+            raise Exception,'Only one -- option allowed'
+    if options.attach==True:
+        if mode=='create':
+            mode = 'attach'
+        else:
+            parser.print_help()
+            raise Exception,'Only one -- option allowed'        
     if not options.host or not options.name:
         parser.print_help()
     else:
@@ -175,6 +208,7 @@ if __name__ == '__main__':
                 parser.print_help()
             else:
                 updateDB(options.host,options.name,options.design,True)
-            
+        elif mode == 'attach':
+            attachDocs(options.host,options.name)
     
         
