@@ -1,217 +1,273 @@
 #!/usr/bin/env python
+#################################
+#
+# stool
+#
+# Simple script and functions for
+# creating and updating couchdb
+# design documents.
+#
+# Author:
+#  Matt Mottram
+#  <m.mottram@qmul.ac.uk>
+#
+#################################
 
 import os
 import sys
+import copy
 import optparse
 import couchdb
 import getpass
 
-def loginDB(host,name):
-    '''Just login to get the database.
+
+def login_database(host, name):
+    '''Login to get the database.
+
     Assume we ALWAYS need login credentials.
     '''
-    db = None
+    database = None
     couch = couchdb.Server(host)
-    couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
+    couch.resource.credentials = (raw_input('Username: '),
+                                  getpass.getpass('Password: '))
     if name in couch:
-        db = couch[name]
-    return couch,db        
+        database = couch[name]
+    return couch, database
 
-def createDB(host,name,path=None):
-    '''Create a database on server with name and design docs in the path
+
+def create_database(host, name, path=None):
+    '''Create a database on server with name and design docs
+    in the given path.
     '''
-    couch,db = loginDB(host,name)
-    if db!=None:
-        print 'db',name,'already exists'
-        return
-    else:
-        db = couch.create(name)
+    couch, database = login_database(host, name)
+    if database is not None:
+        raise Exception('Database %s already exists' % name)
+    database = couch.create(name)
     if path is not None:
-        updateDesign(db,path)
+        update_all_designs(database, path)
 
-def updateDB(host,name,path,removeOld):
-    '''See updateDesign.  This just logs in first
+
+def update_database(host, name, path, remove_old, views_only=False):
+    '''Gets database and then runs update_all_designs.
     '''
-    couch,db = loginDB(host,name)
-    if db==None:
-        print 'db:',name,'does not exist'
-        return
+    couch, database = login_database(host, name)
+    if database is None:
+        raise Exception('database %s does not exist' % name)
     if path is not None:
         try:
-            updateDesign(db,path,removeOld)
+            update_all_designs(database, path, remove_old, views_only)
         except couchdb.http.Unauthorized:
-            couch.resource.credentials = (raw_input('Username: '), getpass.getpass('Password: '))
-            db = couch[name]
-            updateDesign(db,path,removeOld)
-            
-def deleteDB(host,name):
-    '''Delete the database
+            couch.resource.credentials = (raw_input('Username: '),
+                                          getpass.getpass('Password: '))
+            database = couch[name]
+            update_all_designs(database, path, remove_old, views_only)
+
+
+def delete_database(host, name):
+    '''Delete the database.
+
+    Careful now!
     '''
-    ans = raw_input('Delete DB %s from %s! Are you sure (y/N)' %(name,host))
+    answer = raw_input('Delete DB %s from %s! Are you sure (y/N)' %
+                       (name, host))
     if ans != 'Y' and ans != 'y':
         return
-    couch,db = loginDB(host,name)
-    if db==None:
-        print 'db:',name,'does not exist'
-        return
+    couch, database = login_database(host, name)
+    if database is None:
+        raise Exception('database %s does not exist' % name)
     else:
         couch.delete(name)
 
-def updateDesign(db,path,removeOld=False):
-    '''Update all the design documents in a database.
-    If removeOld is True, then any fields (views etc.) not in the path
-    but stored in the doc on the DB are removed from the DB DDoc.
-    '''
-    for dirName in os.walk(path).next()[1]:
-        #each directory should be the name of a design document in the first instance
-        if dirName=='auth':
-            fName = os.path.join(os.path.join(path,dirName),'validate_doc_update.js')
-            if os.path.exists(fName):
-                doc = {'_id':'_design/%s'%dirName,
-                       'language':'javascript'}
-                valStr = ''
-                fin = file(fName)
-                for line in fin.readlines():
-                    valStr += line.strip()
-                doc['validate_doc_update']=valStr
-                try:
-                    db.save(doc)
-                except:
-                    #already have an auth doc, assume it's fine!
-                    pass
-        else:
-            attachList = []
-            doc = {'_id':'_design/%s'%dirName,
-                   'language':'javascript'}
-            if doc['_id'] in db:
-                #empty first if we want to update the design
-                doc = db[doc['_id']]
-                if removeOld==True:
-                    docCopy = doc
-                    doc = {}
-                    doc = {'_id':docCopy['_id'],
-                           '_rev':docCopy['_rev'],
-                           'language':'javascript'}
-            docPath = os.path.join(path,dirName)
-            for subDirName in os.walk(docPath).next()[1]:
-                #add all other information
-                #only want views, shows etc
-                baseDir = os.path.join(docPath,subDirName)
-                if subDirName=='views':
-                    if not doc.has_key('views'):
-                        doc['views']={}
-                    for viewName in os.walk(baseDir).next()[1]:
-                        viewDir = os.path.join(baseDir,viewName)
-                        #should only use map.js and reduce.js here
-                        mapStr = ''
-                        redStr = ''
-                        if os.path.exists(os.path.join(viewDir,'map.js')):
-                            fin = file(os.path.join(viewDir,'map.js'))
-                            for line in fin.readlines():
-                                mapStr += line.strip()
-                        if os.path.exists(os.path.join(viewDir,'reduce.js')):
-                            redStr = ''
-                            fin = file(os.path.join(viewDir,'reduce.js'))
-                            for line in fin.readlines():
-                                redStr += line.strip()
-                        if mapStr!='':
-                            doc['views'][viewName]={}
-                            doc['views'][viewName]['map']=mapStr
-                            if redStr!='':
-                                doc['views'][viewName]['reduce']=redStr
-                if subDirName=='attachments':
-                    for root,dirs,files in os.walk(baseDir):
-                        #maintain the original file structure
-                        for f in files:
-                            fPath = os.path.join(root,f)
-                            fName = fPath[len(baseDir)+1:]
-                            attachList.append([fPath,fName])  
-            db.save(doc)
-            for [fPath,fName] in attachList:
-                db.put_attachment(doc,open(fPath,'r'),fName)
 
-def attachDocs(host,name):
-    couch,db = loginDB(host,name)
-    if db==None:
-        print 'db:',name,'does not exist'
-        return
+def update_all_designs(database, path, remove_old=False, views_only=False):
+    '''Update all the design documents in a database.
+
+    If remove_old is True, then any fields (views etc.) not in the local
+    database path but that are stored in the database document are removed
+    from the document.
+    '''
+    for directory in os.walk(path).next()[1]:
+        # Each top level directory should be the name of a design document
+
+        if directory == 'auth':
+            filename = os.path.join(os.path.join(path, directory),
+                                    'validate_doc_update.js')
+            if os.path.exists(filename):
+                doc = {'_id': '_design/%s' % directory,
+                       'language': 'javascript'}
+                validate_text = ''
+                fin = file(filename)
+                for line in fin.readlines():
+                    validate_text += line.strip()
+                doc['validate_doc_update'] = validate_text
+                try:
+                    database.save(doc)
+                except:
+                    # Already have an auth doc, assume it's fine!
+                    pass
+
+        else:
+            update_design(database, path, directory, remove_old, views_only)
+
+
+def update_design(database, path, directory, remove_old, views_only):
+    '''Update a specific design document.
+    '''
+    attachment_list = []
+    doc = {'_id': '_design/%s' % directory,
+           'language': 'javascript'}
+    if doc['_id'] in database:
+        # Empty first if we want to update the design
+        doc = database[doc['_id']]
+        if remove_old is True:
+            doc_copy = copy.copy(doc)
+            doc = {}
+            doc = {'_id': doc_copy['_id'],
+                   '_rev': doc_copy['_rev'],
+                   'language': 'javascript'}
+    doc_path = os.path.join(path, directory)
+
+    for sub_directory in os.walk(doc_path).next()[1]:
+        # Add all other information
+        # Only want views, shows etc
+        base_directory = os.path.join(doc_path, sub_directory)
+
+        if sub_directory == 'views':
+            if not 'views' in doc:
+                doc['views']={}
+            for view_name in os.walk(base_directory).next()[1]:
+                view_directory = os.path.join(base_directory, view_name)
+                # Should only use map.js and reduce.js here
+                map_text = ''
+                reduce_text = ''
+                if os.path.exists(os.path.join(view_directory, 'map.js')):
+                    fin = file(os.path.join(view_directory, 'map.js'))
+                    for line in fin.readlines():
+                        map_text += line.strip()
+                if os.path.exists(os.path.join(view_directory, 'reduce.js')):
+                    reduce_text = ''
+                    fin = file(os.path.join(view_directory, 'reduce.js'))
+                    for line in fin.readlines():
+                        reduce_text += line.strip()
+                if map_text != '':
+                    doc['views'][view_name]={}
+                    doc['views'][view_name]['map']=map_text
+                    if reduce_text != '':
+                        doc['views'][view_name]['reduce']=reduce_text
+
+        if sub_directory == 'attachments':
+            for root, dirs, files in os.walk(base_directory):
+                # Maintain the original file structure
+                for f in files:
+                    file_path = os.path.join(root, f)
+                    filename = file_path[len(base_directory)+1:]
+                    attachment_list.append([file_path, filename])
+    database.save(doc)
+    if views_only is False:
+        for [file_path, filename] in attachment_list:
+            database.put_attachment(doc, open(file_path, 'r'), filename)
+
+
+def attach_documents(host, name):
+    '''Attache a specific document.
+
+    Can only attach to design documents.
+    '''
+    couch, database = login_database(host, name)
+    if database is None:
+        raise Exception('database %s does not exist' % name)
     else:
-        #prompt user for attachment and design doc to post to
-        postFile = True
-        while postFile==True:
-            dname = raw_input('Doc ID to post to: ')
-            docid = '_design/%s'%dname
-            if not docid in db:
+        # Prompt user for attachment and design doc to post to
+        post_file = True
+        while post_file is True:
+            design_name = raw_input('Design document to post to: ')
+            design_id = '_design/%s' % design_name
+            if not design_id in database:
+                # Don't exit at these points, just don't post and reprompt user
                 print 'cannot post: invalid design name'
             else:
-                fpath = raw_input('Path to file: ')
-                if not os.path.exists(fpath):
+                file_path = raw_input('Path to file: ')
+                if not os.path.exists(file_path):
                     print 'cannot post: invalid file path'
                 else:
-                    fname = raw_input('File name (blank for same as file): ')
-                    if fname=='' or fname==None:
-                        fname = fpath.split('/')[-1]
-                    doc = db[docid]
-                    db.put_attachment(doc,open(fpath,'r'),fname)
+                    filename = raw_input('Filename (blank for same as file): ')
+                    if filename == '' or filename is None:
+                        filename = file_path.split('/')[-1]
+                    doc = database[design_id]
+                    database.put_attachment(doc, open(file_path, 'r'),
+                                            filename)
             another = raw_input('Post another file (y/N): ')
-            if another!='y' and another!='Y':
-                postFile = False
+            if another != 'y' and another != 'Y':
+                post_file = False
+
 
 if __name__ == '__main__':
-    parser = optparse.OptionParser( usage = "./stool <options>")
-    parser.add_option('-n',dest='name',help='Database name')
-    parser.add_option('-s',dest='host',help='Database host server')
-    parser.add_option('-d',dest='design',help='Path to design docs')
-    parser.add_option('--delete',dest='delete',action='store_true',help='Delete specified database',default=False)
-    parser.add_option('--update',dest='update',action='store_true',help='Update specified database',default=False)
-    parser.add_option('--prune' ,dest='prune' ,action='store_true',help='Prune specified database',default=False)
-    parser.add_option('--attach',dest='attach',action='store_true',help='Attach a single document',default=False)
-    (options,args) = parser.parse_args()
+    parser = optparse.OptionParser(usage = "./stool <options>")
+    parser.add_option('-n', dest='name', help='Database name')
+    parser.add_option('-s', dest='host', help='Database host server')
+    parser.add_option('-d', dest='design', help='Path to design docs')
+    parser.add_option('-v', dest='view', action='store_true',
+                      help='Only update views (not attachments)',
+                      default=False)
+    parser.add_option('--delete', dest='delete', action='store_true',
+                      help='Delete specified database', default=False)
+    parser.add_option('--update', dest='update', action='store_true',
+                      help='Update specified database', default=False)
+    parser.add_option('--prune', dest='prune', action='store_true',
+                      help='Prune specified database', default=False)
+    parser.add_option('--attach', dest='attach', action='store_true',
+                      help='Attach a single document', default=False)
+    (options, args) = parser.parse_args()
     mode = 'create'
-    if options.delete==True:
-        if mode=='create':
+
+    if options.delete is True:
+        if mode == 'create':
             mode = 'delete'
         else:
             parser.print_help()
-            raise Exception,'Only one -- option allowed'
-    if options.update==True:
-        if mode=='create':
+            raise Exception('Only one -- option allowed')
+
+    if options.update is True:
+        if mode == 'create':
             mode = 'update'
         else:
             parser.print_help()
-            raise Exception,'Only one -- option allowed'
-    if options.prune==True:
-        if mode=='create':
+            raise Exception('Only one -- option allowed')
+
+    if options.prune is True:
+        if mode == 'create':
             mode = 'prune'
         else:
             parser.print_help()
-            raise Exception,'Only one -- option allowed'
-    if options.attach==True:
-        if mode=='create':
+            raise Exception('Only one -- option allowed')
+
+    if options.attach is True:
+        if mode == 'create':
             mode = 'attach'
         else:
             parser.print_help()
-            raise Exception,'Only one -- option allowed'        
+            raise Exception('Only one -- option allowed')
+
     if not options.host or not options.name:
         parser.print_help()
     else:
         if mode == 'create':
-            createDB(options.host,options.name,options.design)
+            create_database(options.host, options.name, options.design)
         elif mode == 'delete':
-            deleteDB(options.host,options.name)
+            delete_database(options.host, options.name)
         elif mode == 'update':
             if not options.design:
                 print 'design docs required'
                 parser.print_help()
             else:
-                updateDB(options.host,options.name,options.design,False)
+                update_database(options.host, options.name,
+                                options.design, False, options.view)
         elif mode == 'prune':
             if not options.design:
                 print 'design docs required'
                 parser.print_help()
             else:
-                updateDB(options.host,options.name,options.design,True)
+                update_database(options.host, options.name,
+                                options.design, True)
         elif mode == 'attach':
-            attachDocs(options.host,options.name)
-    
-        
+            attach_documents(options.host, options.name)
