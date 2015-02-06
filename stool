@@ -70,7 +70,7 @@ def delete_database(host, name):
     '''
     answer = raw_input('Delete DB %s from %s! Are you sure (y/N)' %
                        (name, host))
-    if ans != 'Y' and ans != 'y':
+    if answer != 'Y' and answer != 'y':
         return
     couch, database = login_database(host, name)
     if database is None:
@@ -138,21 +138,12 @@ def update_design(database, path, directory, remove_old, views_only):
             for view_name in os.walk(base_directory).next()[1]:
                 view_directory = os.path.join(base_directory, view_name)
                 # Should only use map.js and reduce.js here
-                map_text = ''
-                reduce_text = ''
-                if os.path.exists(os.path.join(view_directory, 'map.js')):
-                    fin = file(os.path.join(view_directory, 'map.js'))
-                    for line in fin.readlines():
-                        map_text += line.strip()
-                if os.path.exists(os.path.join(view_directory, 'reduce.js')):
-                    reduce_text = ''
-                    fin = file(os.path.join(view_directory, 'reduce.js'))
-                    for line in fin.readlines():
-                        reduce_text += line.strip()
-                if map_text != '':
+                map_text = parse_text(view_directory, 'map.js')
+                reduce_text = parse_text(view_directory, 'reduce.js')
+                if map_text is not None:
                     doc['views'][view_name]={}
                     doc['views'][view_name]['map']=map_text
-                    if reduce_text != '':
+                    if reduce_text is not None:
                         doc['views'][view_name]['reduce']=reduce_text
 
         if sub_directory == 'attachments':
@@ -166,6 +157,16 @@ def update_design(database, path, directory, remove_old, views_only):
     if views_only is False:
         for [file_path, filename] in attachment_list:
             database.put_attachment(doc, open(file_path, 'r'), filename)
+
+
+def parse_text(directory, filename):
+    filepath = os.path.join(directory, filename)
+    if not os.path.exists(filepath):
+        return None
+    text = ''
+    for line in open(filepath).readlines():
+        text += line.strip()
+    return text
 
 
 def attach_documents(host, name):
@@ -201,6 +202,49 @@ def attach_documents(host, name):
                 post_file = False
 
 
+def update_view(host, name):
+    '''Update a specific view.
+
+    Will do both map and reduce (if present).
+    '''
+    couch, database = login_database(host, name)
+    if database is None:
+        raise Exception('database %s does not exist' % name)
+    post_view = True
+    while post_view is True:
+        path_name = raw_input('Path to design view: ')
+        while path_name[-1]=='/':
+            # ensure no / at the end
+            path_name = path_name[:-1]
+        view_name = os.path.basename(path_name)
+        design_name = os.path.basename(path_name[:-(len(os.path.join("/views", view_name)))])
+        design_id = "_design/%s" % design_name
+        if design_id not in database:
+            # Don't exit at these points, just don't post and reprompt user
+            print 'cannot post: invalid design name %s' % design_id
+        else:    
+            doc = database[design_id]
+            post = "N"
+            if view_name in doc['views']:
+                post = raw_input("Update %s?[y/N]: " % view_name)
+            else:
+                post = raw_input("Post new view %s?[y/N]: " % view_name)
+            if post=="Y" or post=="y":
+                print "Updating view"
+                map_text = parse_text(path_name, 'map.js')
+                reduce_text = parse_text(path_name, 'reduce.js')
+                if map_text is not None:
+                    doc['views'][view_name]={}
+                    doc['views'][view_name]['map']=map_text
+                    if reduce_text is not None:
+                        doc['views'][view_name]['reduce']=reduce_text
+        database.save(doc)
+        another = raw_input('Post another view (y/N): ')
+        print another
+        if another != 'y' and another != 'Y':
+            post_view = False
+
+
 if __name__ == '__main__':
     parser = optparse.OptionParser(usage = "./stool <options>")
     parser.add_option('-n', dest='name', help='Database name')
@@ -217,6 +261,8 @@ if __name__ == '__main__':
                       help='Prune specified database', default=False)
     parser.add_option('--attach', dest='attach', action='store_true',
                       help='Attach a single document', default=False)
+    parser.add_option('--view', dest='view', action='store_true',
+                      help='Update/add a single view', default=False)
     (options, args) = parser.parse_args()
     mode = 'create'
 
@@ -248,6 +294,13 @@ if __name__ == '__main__':
             parser.print_help()
             raise Exception('Only one -- option allowed')
 
+    if options.view is True:
+        if mode == 'create':
+            mode = 'view'
+        else:
+            parser.print_help()
+            raise Exception('Only one -- option allowed')
+
     if not options.host or not options.name:
         parser.print_help()
     else:
@@ -271,3 +324,5 @@ if __name__ == '__main__':
                                 options.design, True)
         elif mode == 'attach':
             attach_documents(options.host, options.name)
+        elif mode == 'view':
+            update_view(options.host, options.name)
