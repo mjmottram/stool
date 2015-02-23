@@ -47,7 +47,7 @@ def create_database(host, name, path=None):
         update_all_designs(database, path)
 
 
-def update_database(host, name, path, remove_old, views_only=False):
+def update_database(host, name, path, remove_old, views=True, attachments=True):
     '''Gets database and then runs update_all_designs.
     '''
     couch, database = login_database(host, name)
@@ -55,12 +55,12 @@ def update_database(host, name, path, remove_old, views_only=False):
         raise Exception('database %s does not exist' % name)
     if path is not None:
         try:
-            update_all_designs(database, path, remove_old, views_only)
+            update_all_designs(database, path, remove_old, views, attachments)
         except couchdb.http.Unauthorized:
             couch.resource.credentials = (raw_input('Username: '),
                                           getpass.getpass('Password: '))
             database = couch[name]
-            update_all_designs(database, path, remove_old, views_only)
+            update_all_designs(database, path, remove_old, views, attachments)
 
 
 def delete_database(host, name):
@@ -79,7 +79,7 @@ def delete_database(host, name):
         couch.delete(name)
 
 
-def update_all_designs(database, path, remove_old=False, views_only=False):
+def update_all_designs(database, path, remove_old=False, views=True, attachments=True):
     '''Update all the design documents in a database.
 
     If remove_old is True, then any fields (views etc.) not in the local
@@ -107,11 +107,13 @@ def update_all_designs(database, path, remove_old=False, views_only=False):
                     pass
 
         else:
-            update_design(database, path, directory, remove_old, views_only)
+            update_design(database, path, directory, remove_old, views, attachments)
 
 
-def update_design(database, path, directory, remove_old, views_only):
+def update_design(database, path, directory, remove_old, views=True, attachments=True):
     '''Update a specific design document.
+
+    views / attachments set to False implies do not update that component
     '''
     attachment_list = []
     doc = {'_id': '_design/%s' % directory,
@@ -153,9 +155,12 @@ def update_design(database, path, directory, remove_old, views_only):
                     file_path = os.path.join(root, f)
                     filename = file_path[len(base_directory)+1:]
                     attachment_list.append([file_path, filename])
-    database.save(doc)
-    if views_only is False:
+    if views:
+        print "update views for %s" % directory
+        database.save(doc)
+    if attachments:
         for [file_path, filename] in attachment_list:
+            print "post attachment %s to %s" % (filename, directory)
             database.put_attachment(doc, open(file_path, 'r'), filename)
 
 
@@ -202,6 +207,39 @@ def attach_documents(host, name):
                 post_file = False
 
 
+def attach_all_documents(host, name):
+    couch, database = login_database(host, name)
+    if database is None:
+        raise Exception('database %s does not exist' % name)
+    directory = raw_input('Path to design folder: ')
+    if not os.path.exists(directory):
+        raise Exception('Path %s does not exist' % directory)
+    design_name = os.path.basename(directory)
+    ok = raw_input('Post attachments for %s (y/N)? ' % design_name)
+    if ok == 'Y' or ok == 'y':
+        print "updating %s" % directory
+        update_design(database, os.path.dirname(directory), design_name, False, views=False, attachments=True)
+    else:
+        print "quitting"
+
+
+def update_single_design(host, name):
+    couch, database = login_database(host, name)
+    if database is None:
+        raise Exception('database %s does not exist' % name)
+    directory = raw_input('Path to design folder: ')
+    if not os.path.exists(directory):
+        raise Exception('Path %s does not exist' % directory)
+    design_name = os.path.basename(directory)
+    ok = raw_input('Update full design doc for %s (y/N)? ' % design_name)
+    if ok == 'Y' or ok == 'y':
+        print "updating %s" % directory
+        update_design(database, os.path.dirname(directory), design_name, False, views=True, attachments=True)
+    else:
+        print "quitting"
+        
+
+        
 def update_view(host, name):
     '''Update a specific view.
 
@@ -216,8 +254,11 @@ def update_view(host, name):
         while path_name[-1]=='/':
             # ensure no / at the end
             path_name = path_name[:-1]
+        print path_name
         view_name = os.path.basename(path_name)
         design_name = os.path.basename(path_name[:-(len(os.path.join("/views", view_name)))])
+        print view_name
+        print design_name
         design_id = "_design/%s" % design_name
         if design_id not in database:
             # Don't exit at these points, just don't post and reprompt user
@@ -238,7 +279,7 @@ def update_view(host, name):
                     doc['views'][view_name]['map']=map_text
                     if reduce_text is not None:
                         doc['views'][view_name]['reduce']=reduce_text
-        database.save(doc)
+            database.save(doc)
         another = raw_input('Post another view (y/N): ')
         print another
         if another != 'y' and another != 'Y':
@@ -261,8 +302,12 @@ if __name__ == '__main__':
                       help='Prune specified database', default=False)
     parser.add_option('--attach', dest='attach', action='store_true',
                       help='Attach a single document', default=False)
+    parser.add_option('--attachall', dest='attachall', action='store_true',
+                      help='Update all attachments for a doc', default=False)
     parser.add_option('--view', dest='view', action='store_true',
                       help='Update/add a single view', default=False)
+    parser.add_option('--design', dest='design', action='store_true',
+                      help='Update/add a single design', default=False)
     (options, args) = parser.parse_args()
     mode = 'create'
 
@@ -294,9 +339,23 @@ if __name__ == '__main__':
             parser.print_help()
             raise Exception('Only one -- option allowed')
 
+    if options.attachall is True:
+        if mode == 'create':
+            mode = 'attachall'
+        else:
+            parser.print_help()
+            raise Exception('Only one -- option allowed')
+
     if options.view is True:
         if mode == 'create':
             mode = 'view'
+        else:
+            parser.print_help()
+            raise Exception('Only one -- option allowed')
+
+    if options.design is True:
+        if mode == 'create':
+            mode = 'design'
         else:
             parser.print_help()
             raise Exception('Only one -- option allowed')
@@ -314,7 +373,7 @@ if __name__ == '__main__':
                 parser.print_help()
             else:
                 update_database(options.host, options.name,
-                                options.design, False, options.view)
+                                options.design, False, True)
         elif mode == 'prune':
             if not options.design:
                 print 'design docs required'
@@ -324,5 +383,9 @@ if __name__ == '__main__':
                                 options.design, True)
         elif mode == 'attach':
             attach_documents(options.host, options.name)
+        elif mode == 'attachall':
+            attach_all_documents(options.host, options.name)
         elif mode == 'view':
             update_view(options.host, options.name)
+        elif mode == 'design':
+            update_single_design(options.host, options.name)
